@@ -1,0 +1,54 @@
+# Maintainer: Xero <xero@xero.sh>
+pkgname=ytm
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Video utility"
+arch=('x86_64')
+license=('MIT')
+depends=(
+    'qt6-base'
+    'qt6-declarative'
+    'mpv'
+    'openssh'
+)
+makedepends=(
+    'rust'
+    'cargo'
+    'clang'
+    'cmake'
+)
+
+prepare() {
+    cd "$startdir/.."
+    export CARGO_BUILD_JOBS=1
+    cargo build --release
+}
+
+package() {
+    cd "$startdir/.."
+
+    # Install binary
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+    # Install QML files
+    install -Dm644 qml/main.qml "$pkgdir/usr/share/$pkgname/qml/main.qml"
+    install -Dm644 qml/VideoItem.qml "$pkgdir/usr/share/$pkgname/qml/VideoItem.qml"
+
+    # Install license
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+    # Install desktop file
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/$pkgname.desktop" << EOF
+[Desktop Entry]
+Name=Xero YTDL
+Comment=Video utility
+Exec=$pkgname
+Icon=YouTubeDownloader
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Network;
+EOF
+
+    # Clean up build artifacts
+    cargo clean --manifest-path "$startdir/../Cargo.toml"
+}

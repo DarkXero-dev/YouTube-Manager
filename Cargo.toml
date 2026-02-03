@@ -1,0 +1,17 @@
+[package]
+name = "ytm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ytm"
+path = "src/main.rs"
+
+[dependencies]
+qmetaobject = "0.2"
+ssh2 = "0.9"
+tokio = { version = "1", features = ["full", "sync"] }
+base64 = "0.22"
+dirs = "5"
+once_cell = "1.18"
+cstr = "0.2"
