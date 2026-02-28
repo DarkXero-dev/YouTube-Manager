@@ -62,12 +62,13 @@ pub fn start_download(
     user: String,
     remote_path: String,
     local_path: String,
+    key_path: Option<String>,
 ) {
     state.reset();
     state.is_active.store(true, Ordering::SeqCst);
 
     thread::spawn(move || {
-        let result = do_download(&state, &host, &user, &remote_path, &local_path);
+        let result = do_download(&state, &host, &user, &remote_path, &local_path, key_path.as_deref());
 
         state.is_active.store(false, Ordering::SeqCst);
 
@@ -91,58 +92,48 @@ fn do_download(
     user: &str,
     remote_path: &str,
     local_path: &str,
+    key_path: Option<&str>,
 ) -> Result<(), String> {
-    // Connect via SSH
-    let tcp = std::net::TcpStream::connect(format!("{}:22", host))
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let addr_str = format!("{}:22", host);
+    let addr = addr_str
+        .to_socket_addrs()
+        .map_err(|e| format!("Address error: {}", e))?
+        .next()
+        .ok_or("No address")?;
+
+    let tcp = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(10))
         .map_err(|e| format!("Connect failed: {}", e))?;
+    let _ = tcp.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = tcp.set_write_timeout(Some(Duration::from_secs(30)));
 
     let mut session = ssh2::Session::new()
         .map_err(|e| format!("Session failed: {}", e))?;
     session.set_tcp_stream(tcp);
-    session.handshake()
+    session
+        .handshake()
         .map_err(|e| format!("Handshake failed: {}", e))?;
 
-    // Auth with SSH key
-    let ssh_dir = dirs::home_dir()
-        .ok_or("No home dir")?
-        .join(".ssh");
-
-    let key_names = ["id_ed25519", "id_rsa", "id_ecdsa"];
-    let mut authenticated = false;
-
-    for key_name in &key_names {
-        let private_key = ssh_dir.join(key_name);
-        if private_key.exists() {
-            let public_key = ssh_dir.join(format!("{}.pub", key_name));
-            let pub_key_opt = if public_key.exists() {
-                Some(public_key.as_path())
-            } else {
-                None
-            };
-
-            if session.userauth_pubkey_file(user, pub_key_opt, &private_key, None).is_ok() {
-                authenticated = true;
-                break;
-            }
-        }
-    }
-
-    if !authenticated {
-        return Err("SSH auth failed".to_string());
-    }
+    crate::ssh_client::authenticate_session(&mut session, user, key_path)
+        .map_err(|e| format!("Auth failed: {}", e))?;
 
     // Open SFTP
-    let sftp = session.sftp()
+    let sftp = session
+        .sftp()
         .map_err(|e| format!("SFTP failed: {}", e))?;
 
     // Get file size
-    let file_stat = sftp.stat(std::path::Path::new(remote_path))
+    let file_stat = sftp
+        .stat(std::path::Path::new(remote_path))
         .map_err(|e| format!("Stat failed: {}", e))?;
     let total_size = file_stat.size.unwrap_or(0);
     state.total_size.store(total_size, Ordering::SeqCst);
 
     // Open remote file
-    let mut remote_file = sftp.open(std::path::Path::new(remote_path))
+    let mut remote_file = sftp
+        .open(std::path::Path::new(remote_path))
         .map_err(|e| format!("Open failed: {}", e))?;
 
     // Create local file
@@ -151,48 +142,44 @@ fn do_download(
 
     let mut buffer = [0u8; 65536];
     let mut bytes_downloaded: u64 = 0;
-    let start_time = std::time::Instant::now();
-    let mut last_speed_update = start_time;
+    let mut last_speed_update = std::time::Instant::now();
     let mut bytes_since_last_update: u64 = 0;
 
     loop {
-        // Check for cancel
         if state.is_cancelled.load(Ordering::SeqCst) {
-            // Clean up partial file
             let _ = std::fs::remove_file(local_path);
             return Err("Cancelled".to_string());
         }
 
-        // Check for pause
         while state.is_paused.load(Ordering::SeqCst) {
             if state.is_cancelled.load(Ordering::SeqCst) {
                 let _ = std::fs::remove_file(local_path);
                 return Err("Cancelled".to_string());
             }
-            thread::sleep(std::time::Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100));
         }
 
-        let bytes_read = remote_file.read(&mut buffer)
+        let bytes_read = remote_file
+            .read(&mut buffer)
             .map_err(|e| format!("Read error: {}", e))?;
 
         if bytes_read == 0 {
             break;
         }
 
-        local_file.write_all(&buffer[..bytes_read])
+        local_file
+            .write_all(&buffer[..bytes_read])
             .map_err(|e| format!("Write error: {}", e))?;
 
         bytes_downloaded += bytes_read as u64;
         bytes_since_last_update += bytes_read as u64;
         state.downloaded.store(bytes_downloaded, Ordering::SeqCst);
 
-        // Update progress
         if total_size > 0 {
             let progress = ((bytes_downloaded as f64 / total_size as f64) * 100.0) as i32;
             state.progress.store(progress, Ordering::SeqCst);
         }
 
-        // Update speed every 500ms
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(last_speed_update).as_secs_f64();
         if elapsed >= 0.5 {

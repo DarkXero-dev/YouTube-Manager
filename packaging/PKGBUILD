@@ -1,6 +1,6 @@
 # Maintainer: Xero <xero@xero.sh>
 pkgname=ytm
-pkgver=0.1.0
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Video utility"
 arch=('x86_64')
