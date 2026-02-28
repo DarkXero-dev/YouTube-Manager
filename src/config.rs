@@ -12,11 +12,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            host: "192.227.180.87".to_string(),
+            host: "".to_string(),
             port: 22,
-            user: "xero".to_string(),
+            user: "".to_string(),
             key_path: None,
-            videos_dir: "/home/xero/docks/ytdl/downloads/".to_string(),
+            videos_dir: "".to_string(),
         }
     }
 }
